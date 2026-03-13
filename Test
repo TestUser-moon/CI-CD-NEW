@@ -1,1 +1,65 @@
 
+name: Run Postman Collection
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  postman-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install Newman + HTML Reporter
+        run: |
+          npm install -g newman
+          npm install -g newman-reporter-htmlextra
+
+      - name: Run Postman Collection
+        run: |
+          newman run application.json \
+          --reporters cli,htmlextra,json \
+          --reporter-htmlextra-export results.html \
+          --reporter-json-export results.json \
+          --reporter-htmlextra-title "CI/CD Test Report" \
+          --reporter-htmlextra-titleSize 4 \
+          --reporter-htmlextra-showEnvironmentData
+
+      - name: Upload TMS Collection HTML Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: newman-report
+          path: |
+            results.html
+            results.json
+      - name: Extract summary counts
+        run: |
+          total=$(jq '.run.stats.tests.total' results.json)
+          failed=$(jq '.run.stats.tests.failed' results.json)
+          skipped=$(jq '.run.stats.tests.pending' results.json)
+          passed=$((total - failed - skipped))
+
+          echo "TOTAL=$total" >> $GITHUB_ENV
+          echo "PASSED=$passed" >> $GITHUB_ENV
+          echo "FAILED=$failed" >> $GITHUB_ENV
+          echo "SKIPPED=$skipped" >> $GITHUB_ENV
+
+      - name: Call REST API with summary + HTML report
+        run: |
+          curl --location 'http://192.168.0.187:5001/api/v1/api-test-runner/get-files' \
+            --header 'Accept: application/json, text/plain, */*' \
+            -F "attachments=@results.html;type=text/html" \
+            -F "total=${{ env.TOTAL }}" \
+            -F "pass=${{ env.PASSED }}" \
+            -F "failed=${{ env.FAILED }}" \
+            -F "skip=${{ env.SKIPPED }}"
